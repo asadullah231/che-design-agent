@@ -9,7 +9,7 @@ import json
 from typing import Optional
 
 
-DWSIM_DEFAULT_PATH = r"C:\DWSIM"
+DWSIM_DEFAULT_PATH = r"C:\Users\User\AppData\Local\DWSIM"
 
 
 class DWSIMConnector:
