@@ -494,9 +494,17 @@ class ChEDesignAgent:
 
     def _agentic_loop(self) -> str:
         full_response = ""
-        messages = list(self.conversation_history)
+        # Keep two separate histories: one for Claude format, one for OpenAI format
+        is_claude = self.llm._type == "claude"
 
-        while True:
+        if is_claude:
+            messages = list(self.conversation_history)
+        else:
+            # Build OpenAI messages fresh — system prompt handled by SDK
+            messages = self._build_oai_messages()
+
+        max_iterations = 6
+        for _ in range(max_iterations):
             result = self.llm.chat(messages, SYSTEM_PROMPT, TOOLS)
             text = result["text"]
             tool_calls = result["tool_calls"]
@@ -507,51 +515,56 @@ class ChEDesignAgent:
             if not tool_calls:
                 break
 
-            # Process each tool call
-            for tc in tool_calls:
-                tool_result = self._execute_tool(tc["name"], tc["input"])
-
-                # Append to history in provider-appropriate format
-                if self.llm._type == "claude":
-                    messages.append({"role": "assistant", "content": result["raw"].content})
+            if is_claude:
+                # Claude: append raw content block + tool results
+                messages.append({"role": "assistant", "content": result["raw"].content})
+                for tc in tool_calls:
+                    tool_result = self._execute_tool(tc["name"], tc["input"])
                     messages.append({
                         "role": "user",
                         "content": [{"type": "tool_result",
                                      "tool_use_id": tc["id"],
                                      "content": tool_result}]
                     })
-                else:
-                    # OpenAI-compatible format
-                    messages.append({
-                        "role": "assistant",
-                        "content": text or None,
-                        "tool_calls": [{
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": json.dumps(tc["input"])
-                            }
-                        }]
+            else:
+                # OpenAI: ALL tool_calls in ONE assistant message, then one tool message per call
+                all_tc_oai = []
+                results_map = {}
+                for tc in tool_calls:
+                    results_map[tc["id"]] = self._execute_tool(tc["name"], tc["input"])
+                    all_tc_oai.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["input"])
+                        }
                     })
+
+                messages.append({
+                    "role": "assistant",
+                    "content": text or None,
+                    "tool_calls": all_tc_oai
+                })
+                for tc in tool_calls:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": tool_result,
+                        "content": results_map[tc["id"]],
                     })
 
-            # Get follow-up response after tool results
-            follow = self.llm.chat(messages, SYSTEM_PROMPT, TOOLS)
-            if follow["text"]:
-                full_response += "\n" + follow["text"]
-
-            # Stop if no more tool calls
-            if not follow["tool_calls"]:
-                break
-            # Otherwise continue loop with updated messages
-            messages = list(messages)
-
         return full_response
+
+    def _build_oai_messages(self) -> list:
+        """Convert conversation history to pure OpenAI format (no system prompt)."""
+        oai = []
+        for msg in self.conversation_history:
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, str):
+                oai.append({"role": role, "content": content})
+            # Skip complex blocks — they only appear mid-loop, not in stored history
+        return oai
 
     # ------------------------------------------------------------------
     # Tool router

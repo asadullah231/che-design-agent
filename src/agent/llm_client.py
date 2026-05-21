@@ -199,9 +199,9 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     def _chat_openai(self, messages, system_prompt, tools, max_tokens) -> dict:
-        oai_messages = [{"role": "system", "content": system_prompt}] + [
-            self._convert_msg_to_oai(m) for m in messages
-        ]
+        # Messages are already in OpenAI format when coming from _agentic_loop
+        # Only prepend system prompt
+        oai_messages = [{"role": "system", "content": system_prompt}] + list(messages)
         oai_tools = [self._convert_tool_to_oai(t) for t in tools] if tools else None
 
         kwargs = {
