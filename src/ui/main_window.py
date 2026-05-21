@@ -250,9 +250,17 @@ class MainWindow(QMainWindow):
         provider = self.config.get("provider", "claude")
         model = self.config.get("model")
         api_keys = self.config.get("api_keys", {})
-        api_key = api_keys.get(provider) or os.getenv(
-            {"claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
-             "openrouter": "OPENROUTER_API_KEY", "deepseek": "DEEPSEEK_API_KEY"}.get(provider, ""), ""
+        env_map = {
+            "claude": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+        }
+        # Check provider key, then fallback to any non-empty key in api_keys
+        api_key = (
+            api_keys.get(provider)
+            or next((v for v in api_keys.values() if v), "")
+            or os.getenv(env_map.get(provider, ""), "")
         )
 
         if not api_key and provider != "ollama":
