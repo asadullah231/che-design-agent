@@ -1,0 +1,8 @@
+{
+  "anthropic_api_key": "sk-ant-YOUR_KEY_HERE",
+  "dwsim_path": "C:\\DWSIM",
+  "exports_dir": "exports",
+  "designs_dir": "designs",
+  "default_property_package": "NRTL",
+  "language": "auto"
+}
