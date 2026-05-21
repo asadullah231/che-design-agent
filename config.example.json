@@ -1,6 +1,13 @@
 {
-  "anthropic_api_key": "sk-ant-YOUR_KEY_HERE",
-  "dwsim_path": "C:\\DWSIM",
+  "provider": "claude",
+  "model": "claude-sonnet-4-6",
+  "api_keys": {
+    "claude":     "sk-ant-YOUR_ANTHROPIC_KEY",
+    "openai":     "sk-YOUR_OPENAI_KEY",
+    "openrouter": "sk-or-YOUR_OPENROUTER_KEY",
+    "deepseek":   "sk-YOUR_DEEPSEEK_KEY"
+  },
+  "dwsim_path": "C:\\Users\\User\\AppData\\Local\\DWSIM",
   "exports_dir": "exports",
   "designs_dir": "designs",
   "default_property_package": "NRTL",

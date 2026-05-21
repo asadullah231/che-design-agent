@@ -1,11 +1,12 @@
 """
-ChE Design Agent - Core AI brain using Claude API
+ChE Design Agent - Core AI brain
+Multi-provider LLM support: Claude, OpenAI, OpenRouter, DeepSeek, Ollama
 Professional chemical engineer level reasoning + DWSIM simulation
 """
 
-import anthropic
 import json
 from typing import Optional
+from src.agent.llm_client import LLMClient, PROVIDERS
 from src.dwsim_bridge.dwsim_connector import DWSIMConnector
 from src.calculations.distillation import DistillationCalculator
 
@@ -468,62 +469,87 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 
 class ChEDesignAgent:
-    def __init__(self, api_key: str, dwsim_path: Optional[str] = None):
-        self.client = anthropic.Anthropic(api_key=api_key)
+    def __init__(self, provider: str = "claude", model: Optional[str] = None,
+                 api_key: Optional[str] = None, dwsim_path: Optional[str] = None):
+        self.llm = LLMClient(provider=provider, model=model, api_key=api_key)
         self.conversation_history = []
         self.current_simulation_results = None
-        self.all_results = {}   # stores all results by tag/name
+        self.all_results = {}
         self.dwsim = DWSIMConnector(dwsim_path)
         self.calc = DistillationCalculator()
 
+    @property
+    def provider_display(self) -> str:
+        return f"{self.llm.provider_name} / {self.llm.model_name}"
+
     def chat(self, user_message: str) -> str:
         self.conversation_history.append({"role": "user", "content": user_message})
-
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8096,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=self.conversation_history
-        )
-
-        result_text = self._process_response(response)
-
+        result_text = self._agentic_loop()
         self.conversation_history.append({"role": "assistant", "content": result_text})
         return result_text
 
     # ------------------------------------------------------------------
-    # Response processing with agentic tool loop
+    # Agentic loop — handles tool calls for any provider
     # ------------------------------------------------------------------
 
-    def _process_response(self, response) -> str:
+    def _agentic_loop(self) -> str:
         full_response = ""
+        messages = list(self.conversation_history)
 
-        for block in response.content:
-            if block.type == "text":
-                full_response += block.text
+        while True:
+            result = self.llm.chat(messages, SYSTEM_PROMPT, TOOLS)
+            text = result["text"]
+            tool_calls = result["tool_calls"]
 
-            elif block.type == "tool_use":
-                tool_result = self._execute_tool(block.name, block.input)
+            if text:
+                full_response += text
 
-                # Append assistant turn with tool use
-                self.conversation_history.append({"role": "assistant", "content": response.content})
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": block.id, "content": tool_result}]
-                })
+            if not tool_calls:
+                break
 
-                # Get agent's interpretation of results
-                follow_up = self.client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=8096,
-                    system=SYSTEM_PROMPT,
-                    tools=TOOLS,
-                    messages=self.conversation_history
-                )
-                for b in follow_up.content:
-                    if b.type == "text":
-                        full_response += "\n" + b.text
+            # Process each tool call
+            for tc in tool_calls:
+                tool_result = self._execute_tool(tc["name"], tc["input"])
+
+                # Append to history in provider-appropriate format
+                if self.llm._type == "claude":
+                    messages.append({"role": "assistant", "content": result["raw"].content})
+                    messages.append({
+                        "role": "user",
+                        "content": [{"type": "tool_result",
+                                     "tool_use_id": tc["id"],
+                                     "content": tool_result}]
+                    })
+                else:
+                    # OpenAI-compatible format
+                    messages.append({
+                        "role": "assistant",
+                        "content": text or None,
+                        "tool_calls": [{
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc["input"])
+                            }
+                        }]
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": tool_result,
+                    })
+
+            # Get follow-up response after tool results
+            follow = self.llm.chat(messages, SYSTEM_PROMPT, TOOLS)
+            if follow["text"]:
+                full_response += "\n" + follow["text"]
+
+            # Stop if no more tool calls
+            if not follow["tool_calls"]:
+                break
+            # Otherwise continue loop with updated messages
+            messages = list(messages)
 
         return full_response
 

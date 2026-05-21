@@ -84,7 +84,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.agent = None
         self.worker = None
-        self.api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        self.config = self._load_config()
         self._setup_ui()
         self._init_agent()
 
@@ -166,6 +166,11 @@ class MainWindow(QMainWindow):
         new_btn.setFixedWidth(100)
         new_btn.clicked.connect(self._new_conversation)
 
+        settings_btn = QPushButton("⚙️ Settings")
+        settings_btn.setObjectName("secondary")
+        settings_btn.setFixedWidth(100)
+        settings_btn.clicked.connect(self._open_settings)
+
         header_layout.addWidget(title_label)
         header_layout.addStretch()
         header_layout.addWidget(self.status_label)
@@ -174,6 +179,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(export_excel_btn)
         header_layout.addWidget(export_pdf_btn)
         header_layout.addWidget(new_btn)
+        header_layout.addWidget(settings_btn)
 
         # Chat area
         self.scroll_area = QScrollArea()
@@ -231,46 +237,55 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(input_frame)
         self.setStatusBar(self.status_bar)
 
-    def _init_agent(self):
-        if not self.api_key:
-            self._prompt_api_key()
-            return
-        try:
-            self.agent = ChEDesignAgent(api_key=self.api_key)
-            dwsim_status = "Connected" if self.agent.dwsim.is_available() else "Not Connected (using built-in calculations)"
-            self.status_label.setText(f"● DWSIM: {dwsim_status}")
-            color = "#00CC00" if self.agent.dwsim.is_available() else "#FFA500"
-            self.status_label.setStyleSheet(f"color: {color};")
-            self.status_bar.showMessage(f"Agent ready | DWSIM: {dwsim_status}")
-        except Exception as e:
-            self._add_agent_message(f"**Error initializing agent:** {e}\n\nPlease check your API key in config.json")
-
-    def _prompt_api_key(self):
-        from PyQt6.QtWidgets import QInputDialog
-        key, ok = QInputDialog.getText(
-            self, "API Key Required",
-            "Enter your Anthropic API Key:",
-            QLineEdit.EchoMode.Password
-        )
-        if ok and key:
-            self.api_key = key
-            os.environ["ANTHROPIC_API_KEY"] = key
-            self._save_api_key(key)
-            self._init_agent()
-        else:
-            self._add_agent_message("**API Key not provided.** Please set ANTHROPIC_API_KEY in config.json and restart.")
-
-    def _save_api_key(self, key: str):
-        import json
+    def _load_config(self) -> dict:
         config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.json")
         try:
-            with open(config_path, "r") as f:
-                config = json.load(f)
+            import json
+            with open(config_path) as f:
+                return json.load(f)
         except Exception:
-            config = {}
-        config["anthropic_api_key"] = key
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
+            return {}
+
+    def _init_agent(self):
+        provider = self.config.get("provider", "claude")
+        model = self.config.get("model")
+        api_keys = self.config.get("api_keys", {})
+        api_key = api_keys.get(provider) or os.getenv(
+            {"claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+             "openrouter": "OPENROUTER_API_KEY", "deepseek": "DEEPSEEK_API_KEY"}.get(provider, ""), ""
+        )
+
+        if not api_key and provider != "ollama":
+            self._add_agent_message(
+                f"**API Key missing for {provider}.**\n\n"
+                "Click **⚙️ Settings** to add your API key and select a provider."
+            )
+            self.status_label.setText("● No API Key")
+            self.status_label.setStyleSheet("color: #FF4444;")
+            return
+
+        try:
+            dwsim_path = self.config.get("dwsim_path")
+            self.agent = ChEDesignAgent(provider=provider, model=model,
+                                        api_key=api_key, dwsim_path=dwsim_path)
+            dwsim_status = "Connected" if self.agent.dwsim.is_available() else "Fallback calcs"
+            provider_display = self.agent.provider_display
+            self.status_label.setText(f"● {provider_display} | DWSIM: {dwsim_status}")
+            color = "#00CC00" if self.agent.dwsim.is_available() else "#FFA500"
+            self.status_label.setStyleSheet(f"color: {color};")
+            self.status_bar.showMessage(f"Agent ready | {provider_display} | DWSIM: {dwsim_status}")
+        except Exception as e:
+            self._add_agent_message(f"**Error:** {e}\n\nClick ⚙️ Settings to configure.")
+
+    def _open_settings(self):
+        from src.ui.settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self)
+        if dlg.exec():
+            # Reload config and reinitialize agent
+            self.config = self._load_config()
+            self.agent = None
+            self._add_agent_message("**Settings updated!** Reinitializing agent...")
+            self._init_agent()
 
     def _send_message(self):
         text = self.input_box.text().strip()
